@@ -16,31 +16,39 @@ type MessageHandler struct {
 	logger   zerolog.Logger
 	sessions types.SessionManager
 	webrtc   types.WebRTCManager
+	remote   types.RemoteManager
 	banned   map[string]bool
 	locked   bool
 }
 
 func (h *MessageHandler) Connected(id string, socket *WebSocket) (bool, string, error) {
 	address := socket.Address()
-	if address == nil {
-		h.logger.Debug().Msg("no remote address, baling")
+	if address == "" {
+		h.logger.Debug().Msg("no remote address")
 	} else {
-		ok, banned := h.banned[*address]
+		ok, banned := h.banned[address]
 		if ok && banned {
-			h.logger.Debug().Str("address", *address).Msg("banned")
-			return false, "This IP has been banned", nil
+			h.logger.Debug().Str("address", address).Msg("banned")
+			return false, "banned", nil
 		}
 	}
 
 	if h.locked {
-		h.logger.Debug().Msg("server locked")
-		return false, "Server is currently locked", nil
+		session, ok := h.sessions.Get(id)
+		if !ok || !session.Admin() {
+			h.logger.Debug().Msg("server locked")
+			return false, "locked", nil
+		}
 	}
 
 	return true, "", nil
 }
 
 func (h *MessageHandler) Disconnected(id string) error {
+	if h.locked && len(h.sessions.Admins()) == 0 {
+		h.locked = false
+	}
+
 	return h.sessions.Destroy(id)
 }
 
@@ -84,13 +92,13 @@ func (h *MessageHandler) Message(id string, raw []byte) error {
 
 	// Chat Events
 	case event.CHAT_MESSAGE:
-		payload := &message.ChatRecieve{}
+		payload := &message.ChatReceive{}
 		return errors.Wrapf(
 			utils.Unmarshal(payload, raw, func() error {
 				return h.chat(id, session, payload)
 			}), "%s failed", header.Event)
 	case event.CHAT_EMOTE:
-		payload := &message.EmoteRecieve{}
+		payload := &message.EmoteReceive{}
 		return errors.Wrapf(
 			utils.Unmarshal(payload, raw, func() error {
 				return h.chatEmote(id, session, payload)
